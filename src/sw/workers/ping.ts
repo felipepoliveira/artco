@@ -10,7 +10,6 @@ self.onmessage = (rawMsg) => {
 
             // call ping method
             clock.start();
-            console.log("Ping")
             const elapsed = clock.stop();
 
             self.postMessage(new Ping({

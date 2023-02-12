@@ -9,7 +9,8 @@ export interface ServiceWatcherWorkerResponse {
 }
 
 export interface ServiceWatcherWorkerRequest {
-    event : ServiceWatcherWorkerEvents
+    event : ServiceWatcherWorkerEvents,
+    source : ServiceWatcher
 }
 
 export class Warmup implements ServiceWatcherWorkerResponse {
@@ -22,9 +23,10 @@ export class Warmup implements ServiceWatcherWorkerResponse {
     }
 }
 
-interface PingPayload {
+export interface PingPayload {
     serviceIsAvailable : boolean;
     elapsedTimeInMillis : number;
+    reason? : string;
 }
 
 export class Ping implements PingPayload, ServiceWatcherWorkerResponse{
@@ -44,15 +46,34 @@ export class Ping implements PingPayload, ServiceWatcherWorkerResponse{
      */
     elapsedTimeInMillis : number;
 
+    /**
+     * The reason from the returned ping message. Generally use to identify errors or to 
+     * specify success messages
+     */
+    reason? : string;
+
     constructor(config : PingPayload) {
         this.event = "ping";
         this.serviceIsAvailable = config.serviceIsAvailable;
         this.elapsedTimeInMillis = config.elapsedTimeInMillis;
+        this.reason = config.reason;
     }
 }
 
 interface OnServiceWatcherDestroyCallback {
     () : void
+}
+
+interface OnAvailabilityChange {
+    (ping : Ping) : void;
+}
+
+interface OnPingCallback {
+    (ping : Ping) : void;
+}
+
+interface OnWarmupCallback {
+    (warmup : Warmup) : void;
 }
 
 /**
@@ -65,13 +86,21 @@ export class ServiceWatcher {
      * This function returns an object of type Ping that contains data about the service verification. 
      */
     worker : Worker;
+
+    /**
+     * Store general service watcher configurations
+     */
     constructor(
         id : string,
-        worker : Worker
+        worker : Worker,
         ) {
             this.id = id;
             this.worker = worker;
 
+    }
+
+    serviceIsAvailable(ping : Ping) : boolean {
+        return ping.serviceIsAvailable;
     }
 }
 
@@ -104,7 +133,7 @@ class ObservedServiceWatcher {
             const ping = data as Ping;
             this._lastPingElapsedTimeInMilliseconds = ping.elapsedTimeInMillis;
             this._lastPingTimestampMillis = Date.now();
-            this._isAvailable = ping.serviceIsAvailable;
+            this._isAvailable = this.source.serviceIsAvailable(ping);
         }
         else if (data.event === "warmup") {
             const warmup = data as Warmup;
@@ -145,12 +174,12 @@ export class Artco {
     /**
      * Array that stores all ServiceWatchers registered through the use function
      */
-    private serviceWatchers : ServiceWatchersMap;
+    serviceWatchers : ServiceWatchersMap;
 
     /**
      * Store the ping interval identification number returned by the setInterval function
      */
-    private pingIntervalId? : number;
+    pingIntervalId? : number;
 
     constructor() {
         this.serviceWatchers = {};
@@ -168,40 +197,40 @@ export class Artco {
         // add on message event listener on worker
         resource.worker.onmessage = (rawMsg) => {
             const msg = rawMsg as MessageEvent<ServiceWatcherWorkerResponse>;
-            console.log(`Received ${msg.data.event} message from worker`);
-
             switch (msg.data.event) {
                 case "ping": {
-                    console.log(`Service ${resource.id} sent an ping message`);
+                    const stateBeforePing = observedServiceWatcher.isAvailable;
                     const ping = msg.data as Ping;
                     observedServiceWatcher.compute(ping);
-                    //TODO implement service listeners
+                    // console.log("the ping object: ", ping);
+                    // if (config) {
+                    //     if (config.onPingCallback) console.log("Ping callback: ", ping) //config.onPingCallback(ping);
+                    //     if (config.onAvailabilityChange && stateBeforePing !== observedServiceWatcher.isAvailable) console.log("Availability change callback: ", ping) //config.onAvailabilityChange(ping);
+                    // }
                     break;
                 }
                 case "warmup" : {
                     const warmup = msg.data as Warmup;
-                    console.log(`Service ${resource.id} sent an warmup message`);
                     observedServiceWatcher.compute(warmup);
-                    //TODO implement service listeners
                     break;
                 }
             }
         }
     }
 
-    private triggerPingRequest() {
-         // create an ping request that will be sent to all service watchers
-         const msg : ServiceWatcherWorkerRequest = {
-            event : "ping"
-        }
-
+    triggerPingRequest() {
         for (const swId in this.serviceWatchers) {
             const sw = this.serviceWatchers[swId];
 
             // skip not warm services
             if (!sw.isWarm) {
-                console.log(`Service ${sw.source.id} is not warm yet`);
                 continue;
+            }
+
+            // create an ping request that will be sent to all service watchers
+            const msg : ServiceWatcherWorkerRequest = {
+                event : "ping",
+                source : sw.source
             }
             
             // send a ping request to the service watcher worker
@@ -248,7 +277,7 @@ export class Artco {
         // terminal all service watcher workers
         for (const swId in this.serviceWatchers) {
             const sw = this.serviceWatchers[swId];
-            sw.worker.terminate();
+            sw.source.worker.terminate();
         }
     }
 

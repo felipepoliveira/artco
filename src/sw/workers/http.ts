@@ -4,14 +4,14 @@ import { HttpServiceWatcher } from "../service_watchers.ts";
 
 export class HttpPing extends Ping {
 
-    response? : Response;
+    status : number;
 
-    constructor(ping : PingPayload, response : Response | undefined = undefined) {
+    constructor(ping : PingPayload, status : number) {
         super({
             ...ping
         })
         this.event = "ping";
-        this.response = response;
+        this.status = status;
     }
 }
 
@@ -51,7 +51,7 @@ self.onmessage = (rawMessage : MessageEvent<ServiceWatcherWorkerRequest>) => {
                             elapsedTimeInMillis : clock.stop(),
                             serviceIsAvailable : true,
                         }, 
-                        response
+                        response.status
                     )
                 );
             })

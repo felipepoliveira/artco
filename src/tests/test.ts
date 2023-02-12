@@ -1,13 +1,37 @@
-import Artco, { Ping, ServiceWatcher } from "../artco.ts"
-import { HttpServiceWatcher, PingServiceWatcher } from "../sw/service_watchers.ts";
+import Artco from "../artco.ts";
+import {HttpServiceWatcher} from "../sw/service_watchers.ts"
 
-//Artco.use(new PingServiceWatcher("Ping"))
-const httpServiceWatcher = new HttpServiceWatcher("Example website", {
-    url : "http://example.com"
-});
-Artco.use(httpServiceWatcher);
+Artco.use(
+    new HttpServiceWatcher(
+        "Google",
+        {
+            url : "https://www.google.com/"
+        }
+    )
+)
 
-Artco.start({
-    pingIntervalMillis : 3000,
-    timeoutUntilFirstPing : 5000
-});
+Artco.use(
+    new HttpServiceWatcher(
+        "Klaus Fiscal",
+        {
+            url : "https://www.klausfiscal.com.br/"
+        }
+    ),
+    {
+        evaluateIfServiceIsAvailableCallback : () => {
+            return false;
+        }
+    }
+)
+
+Artco.events.onPingCallback = (sw, ping) => {
+    console.log(`Recebendo um ping do serviço ${sw.id}: ${ping.serviceIsAvailable}`)
+}
+
+Artco.events.onAvailabilityChange = (sw, isAvailable) => {
+    console.log(`O serviço ${sw.id} está disponível: ${isAvailable}`);
+}
+
+
+
+Artco.start();

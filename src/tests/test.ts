@@ -1,6 +1,10 @@
 import Artco from "../artco.ts";
 import {HttpServiceWatcher} from "../sw/service_watchers.ts"
 
+let mockedAvailability = false;
+
+setTimeout(() => mockedAvailability = true, 10000);
+
 Artco.use(
     new HttpServiceWatcher(
         "Google",
@@ -19,13 +23,12 @@ Artco.use(
     ),
     {
         evaluateIfServiceIsAvailableCallback : () => {
-            return false;
+            return mockedAvailability;
         }
     }
 )
 
 Artco.events.onPingCallback = (sw, ping) => {
-    console.log(`Recebendo um ping do serviço ${sw.id}: ${ping.serviceIsAvailable}`)
 }
 
 Artco.events.onAvailabilityChange = (sw, isAvailable) => {

@@ -104,7 +104,7 @@ class ObservedServiceWatcher {
 
     private _isWarm : boolean = false;
 
-    private _isAvailable : boolean = false;
+    private _isAvailable : boolean = true;
 
     private _lastPingElapsedTimeInMilliseconds : number = 0;
 

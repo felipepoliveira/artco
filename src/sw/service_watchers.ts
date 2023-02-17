@@ -4,10 +4,11 @@ import { ServiceWatcher, ServiceWatcherConfig } from "../artco.ts";
  * Service watcher created for tests purposes
  */
 export class PingServiceWatcher extends ServiceWatcher {
-    constructor(id : string) {
+    constructor(id : string, config? : ServiceWatcherConfig) {
         super(
             id,
             new Worker(new URL("workers/ping.ts", import.meta.url).href, { type: "module", name : "PingServiceWatcherWorker" }),
+            config
             )
     }
 }
@@ -29,6 +30,7 @@ export class HttpServiceWatcher extends ServiceWatcher {
         super(
             id,
             new Worker(new URL("workers/http.ts", import.meta.url).href, { type: "module", name : "HttpServiceWatcherWorker" }),
+            config
         )
 
         this.config = config;

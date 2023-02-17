@@ -2,16 +2,20 @@ import {Ping, PingPayload, ServiceWatcherWorkerRequest, Warmup} from "../../artc
 import { Clock } from "../../utils/clock.ts";
 import { HttpServiceWatcher } from "../service_watchers.ts";
 
+interface HttpResponse {
+    status : number
+}
+
 export class HttpPing extends Ping {
 
-    status : number;
+    response : HttpResponse;
 
-    constructor(ping : PingPayload, status : number) {
+    constructor(ping : PingPayload, response : HttpResponse) {
         super({
             ...ping
         })
         this.event = "ping";
-        this.status = status;
+        this.response = response;
     }
 }
 
@@ -51,16 +55,18 @@ self.onmessage = (rawMessage : MessageEvent<ServiceWatcherWorkerRequest>) => {
                             elapsedTimeInMillis : clock.stop(),
                             serviceIsAvailable : true,
                         }, 
-                        response.status
+                        {
+                            status : response.status
+                        }
                     )
                 );
             })
-            .catch(error => {
-                console.error(error);
+            .catch(e => {
+                const error = e as Error;
                 self.postMessage(new Ping({
                     elapsedTimeInMillis : clock.stop(),
                     serviceIsAvailable : false,
-                    reason : "Request thrown an error"
+                    reason : "Request thrown an error: " + error.message
                 }))
             })
             .finally(() => {

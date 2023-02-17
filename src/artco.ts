@@ -5,7 +5,8 @@ interface OnWarmupCallback {
 type ServiceWatcherWorkerEvents = "ping" | "warmup";
 
 export interface ServiceWatcherWorkerResponse {
-    event : ServiceWatcherWorkerEvents
+    event : ServiceWatcherWorkerEvents,
+    reason? : string;
 }
 
 export interface ServiceWatcherWorkerRequest {
@@ -60,6 +61,10 @@ export class Ping implements PingPayload, ServiceWatcherWorkerResponse{
     }
 }
 
+interface ServiceWatcherConfig {
+    pingTimeoutMillis? : number;
+}
+
 /**
  * 
  */
@@ -71,15 +76,23 @@ export class ServiceWatcher {
      */
     worker : Worker;
 
+    pingTimeoutMillis? : number;
+
     /**
      * Store general service watcher configurations
      */
     constructor(
         id : string,
         worker : Worker,
+        config? : ServiceWatcherConfig
+
         ) {
             this.id = id;
             this.worker = worker;
+            // add optional configuration
+            if (config) {
+                this.pingTimeoutMillis = config.pingTimeoutMillis;
+            }
 
     }
 }
@@ -95,7 +108,12 @@ interface ArtcoStartupConfiguration {
 
 export interface ServiceWatcherUsageConfig {
     evaluateIfServiceIsAvailableCallback? : EvaluateIfServiceIsAvailableCallback;
+    onStateChange? : OnStateChange,
+    onPing? : OnPingCallback,
+    timeout : number;
 }
+
+type ObservedServiceWatcherStates = "NotAvailable" | "Available" | "Unstable"
 
 class ObservedServiceWatcher {
     source : ServiceWatcher;
@@ -108,11 +126,15 @@ class ObservedServiceWatcher {
 
     private _lastPingElapsedTimeInMilliseconds : number = 0;
 
+    private _state : ObservedServiceWatcherStates = "NotAvailable"
+
     serviceWatcherUsageConfig : ServiceWatcherUsageConfig;
 
     constructor(source : ServiceWatcher, serviceWatcherUsageConfig : ServiceWatcherUsageConfig | undefined = undefined) {
         this.source = source;
-        this.serviceWatcherUsageConfig = (serviceWatcherUsageConfig) ? serviceWatcherUsageConfig : {};
+        this.serviceWatcherUsageConfig = (serviceWatcherUsageConfig) ? serviceWatcherUsageConfig : {
+            timeout : 10000
+        };
     }
 
     compute(data : Ping | Warmup) {
@@ -126,10 +148,12 @@ class ObservedServiceWatcher {
                 this.serviceWatcherUsageConfig.evaluateIfServiceIsAvailableCallback(ping)
                 :
                 ping.serviceIsAvailable;
+            this._state = (ping.serviceIsAvailable) ? "Available" : "NotAvailable";
         }
         else if (data.event === "warmup") {
             const warmup = data as Warmup;
             this._isWarm = warmup.isWarm;
+            this._state = (warmup.isWarm) ? "Unstable" : "NotAvailable"
         }
     }
 
@@ -148,13 +172,17 @@ class ObservedServiceWatcher {
     get isWarm() : boolean {
         return this. _isWarm;
     }
+
+    get state() : ObservedServiceWatcherStates{
+        return this._state;
+    }
 }
 
 /**
  * Official wrapper used inside the Artco bot to control all 
  * registered service watchers
  */
-type ServiceWatchersMap = {
+type ObservedServiceWatchersMap = {
     [id : string] : ObservedServiceWatcher
 }
 
@@ -162,20 +190,20 @@ interface OnServiceWatcherDestroyCallback {
     () : void
 }
 
-interface OnAvailabilityChange {
-    (sw : ServiceWatcher, isAvailable : boolean, ping : Ping) : void;
+interface OnStateChange {
+    (sw : ObservedServiceWatcher, response : ServiceWatcherWorkerResponse) : void;
 }
 
 interface OnPingCallback {
-    (sw : ServiceWatcher, ping : Ping) : void;
+    (sw : ObservedServiceWatcher, ping : Ping) : void;
 }
 
 interface OnWarmupCallback {
-    (sw : ServiceWatcher, warmup : Warmup) : void;
+    (sw : ObservedServiceWatcher, warmup : Warmup) : void;
 }
 
 export interface ArtcoEvents {
-    onAvailabilityChange? : OnAvailabilityChange,
+    onStateChange? : OnStateChange,
     onPingCallback? : OnPingCallback,
     onWarmupCallback? : OnWarmupCallback
 }
@@ -192,7 +220,7 @@ export class Artco {
     /**
      * Array that stores all ServiceWatchers registered through the use function
      */
-    private serviceWatchers : ServiceWatchersMap;
+    private _serviceWatchers : ObservedServiceWatchersMap;
 
     /**
      * Store the ping interval identification number returned by the setInterval function
@@ -202,7 +230,7 @@ export class Artco {
     events : ArtcoEvents
 
     constructor() {
-        this.serviceWatchers = {};
+        this._serviceWatchers = {};
         this.events = {};
     }
 
@@ -213,20 +241,23 @@ export class Artco {
      */
     use(resource : ServiceWatcher, serviceWatcherUsageConfig : ServiceWatcherUsageConfig | undefined = undefined) {
         const observedServiceWatcher = new ObservedServiceWatcher(resource, serviceWatcherUsageConfig);
-        this.serviceWatchers[resource.id] = observedServiceWatcher;
+        this._serviceWatchers[resource.id] = observedServiceWatcher;
 
         // add on message event listener on worker
         resource.worker.onmessage = (rawMsg) => {
+            const stateBeforePing = observedServiceWatcher.state;
             const msg = rawMsg as MessageEvent<ServiceWatcherWorkerResponse>;
             switch (msg.data.event) {
                 case "ping": {
-                    const stateBeforePing = observedServiceWatcher.isAvailable;
+                    
                     const ping = msg.data as Ping;
                     observedServiceWatcher.compute(ping);
-                    if (this.events) {
-                        if (this.events.onPingCallback) this.events.onPingCallback(observedServiceWatcher.source, ping);
-                        if (this.events.onAvailabilityChange && stateBeforePing !== observedServiceWatcher.isAvailable) this.events.onAvailabilityChange(observedServiceWatcher.source, observedServiceWatcher.isAvailable, ping);
-                    }
+
+                    // trigger event callback for sw instance
+                    if (observedServiceWatcher.serviceWatcherUsageConfig.onPing) observedServiceWatcher.serviceWatcherUsageConfig.onPing(observedServiceWatcher, ping);
+
+                    // trigger event callback for Artco instance
+                    if (this.events.onPingCallback) this.events.onPingCallback(observedServiceWatcher, ping);
                     break;
                 }
                 case "warmup" : {
@@ -235,15 +266,35 @@ export class Artco {
                     break;
                 }
             }
+
+            // store flag indicating if the service watcher state changed
+            const stateChanged = stateBeforePing !== observedServiceWatcher.state;
+
+            // trigger event callback for sw instance
+            if (observedServiceWatcher.serviceWatcherUsageConfig.onStateChange && stateChanged) {
+                observedServiceWatcher.serviceWatcherUsageConfig.onStateChange(observedServiceWatcher, msg.data);
+            }
+
+            // trigger event callback for Artco instance
+            if (this.events.onStateChange && stateChanged) {
+                this.events.onStateChange(observedServiceWatcher, msg.data);
+            } 
         }
     }
 
+    /**
+     * Send ping message to all registered ServiceWatchers mapped by this
+     * artco instance. The ping message will only be sent if the service watcher
+     * sent an afirmative warmup message
+     */
     triggerPingRequest() {
-        for (const swId in this.serviceWatchers) {
-            const sw = this.serviceWatchers[swId];
+        for (const swId in this._serviceWatchers) {
+            const sw = this._serviceWatchers[swId];
 
             // skip not warm services
-            if (!sw.isWarm) {
+            // skip if the ping of the current sw is on timeout
+            if (!sw.isWarm || sw.source.pingTimeoutMillis && 
+                Date.now() - sw.lastPingTimestampMillis < sw.source.pingTimeoutMillis) {
                 continue;
             }
 
@@ -258,6 +309,10 @@ export class Artco {
         }
     }
 
+    /**
+     * Start Artco service watcher ping service
+     * @param config 
+     */
     start(config? : ArtcoStartupConfiguration) {
         // create an default configuration object instance
         let startupConfig : ArtcoStartupConfiguration = {
@@ -272,8 +327,8 @@ export class Artco {
             }
         }
 
+        // trigger ping requests on an defined interval
         if (config?.timeoutUntilFirstPing) console.log(`Artco will wait ${config.timeoutUntilFirstPing} milliseconds until the first ping request`);
-
         setTimeout(() => {
 
             this.triggerPingRequest();
@@ -295,10 +350,18 @@ export class Artco {
         }
 
         // terminal all service watcher workers
-        for (const swId in this.serviceWatchers) {
-            const sw = this.serviceWatchers[swId];
+        for (const swId in this._serviceWatchers) {
+            const sw = this._serviceWatchers[swId];
             sw.source.worker.terminate();
         }
+    }
+
+    get serviceWatchers() {
+        const observedServiceWatchers : ObservedServiceWatcher[] = [];
+        for (const swName in this._serviceWatchers) {
+            observedServiceWatchers.push(this._serviceWatchers[swName]);
+        }
+        return observedServiceWatchers;
     }
 
 }

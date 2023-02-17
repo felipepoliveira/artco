@@ -1,39 +1,30 @@
 import Artco from "../artco.ts";
 import {HttpServiceWatcher} from "../sw/service_watchers.ts"
+import { HttpPing } from "../sw/workers/http.ts";
 
 let mockedAvailability = false;
-
-setTimeout(() => mockedAvailability = true, 10000);
-
 Artco.use(
     new HttpServiceWatcher(
         "Google",
         {
-            url : "https://www.google.com/"
-        }
-    )
-)
-
-Artco.use(
-    new HttpServiceWatcher(
-        "Klaus Fiscal",
-        {
-            url : "https://www.klausfiscal.com.br/"
-        }
+            url : "https://www.google.com/",
+        },
     ),
     {
-        evaluateIfServiceIsAvailableCallback : () => {
-            return mockedAvailability;
-        }
+        onStateChange : (sw, response) => {
+            console.log(`O serviço ${sw.source.id} encontra-se: ${sw.state} and return reason ${response.reason}`);
+        },
+        onPing : (sw, ping) => {
+            const httpPing = ping as HttpPing;
+            console.log(`Recebendo um ping do serviço ${sw.source.id} com status ${httpPing.response.status}`)
+        },
+        timeout : 10000
     }
 )
 
-Artco.events.onPingCallback = (sw, ping) => {
-}
-
-Artco.events.onAvailabilityChange = (sw, isAvailable) => {
-    console.log(`O serviço ${sw.id} está disponível: ${isAvailable}`);
-}
+setInterval(() => {
+    console.log(Artco.serviceWatchers);
+}, 10000)
 
 
 
